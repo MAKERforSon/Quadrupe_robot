@@ -3,11 +3,6 @@
 四足歩行ロボット開発プロジェクト
 <img width="832" height="685" alt="image" src="https://github.com/user-attachments/assets/b668775c-62b6-4a0a-a9b0-e35090414820" />
 <img width="1125" height="2436" alt="image" src="https://github.com/user-attachments/assets/ca339d41-310a-48ac-83cf-2b29f46cc03a" />
-
-
-
-
-
 ## 使用部品
 - Raspberry Pi
 - ESP32
@@ -21,6 +16,8 @@
 ### ESP32を題材にした学習サイト(Eng)
 https://esp32.implrust.com
 
+
+# 各プログラムの使用方法
 
 
 ## 1. ESP32 MACアドレス確認 (`ESP32MacADDRcheck`)
