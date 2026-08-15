@@ -19,7 +19,7 @@ https://esp32.implrust.com
 
 
 # プログラムの使用方法
-## 1. ESP32 MACアドレス確認 (`ESP32MacADDRcheck`)
+## ESP32MacADDRcheck
 ESP32のMACアドレスを取得するためのプログラムです。
 
 ### 注意
