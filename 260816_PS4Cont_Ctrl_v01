@@ -1,0 +1,174 @@
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+#include <PS4Controller.h>
+
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+// --- サーボ換算用パラメータ ---
+const float DEG_TO_PCA = 2.27; // 1度あたりのPCAカウント変化量
+const int   PCA_CENTER = 325;  // 90度（付け根のセンター）のPCAカウント値
+
+// 💡 各付け根サーボのベース角度
+const float FR_HIP_BASE = 135.0; // 0番ピン（前右）
+const float FL_HIP_BASE = 45.0;  // 2番ピン（前左）
+const float BR_HIP_BASE = 45.0;  // 4番ピン（後右）
+const float BL_HIP_BASE = 135.0; // 6番ピン（後左）
+
+// 💡 各ひざサーボの初期角度（接地時のベース角度）
+const float FR_KNEE_INIT = 180.0; // 1番ピン（前右）
+const float FL_KNEE_INIT = 0.0;   // 3番ピン（前左）
+const float BR_KNEE_INIT = 0.0;   // 5番ピン（後右）
+const float BL_KNEE_INIT = 180.0; // 7番ピン（後左）
+
+// --- 歩行モーションのパラメータ ---
+const float PERIOD = 750.0;      // 1周期の時間 (ms)
+const float SWING_AMP = 20.0;    // 付け根の振り幅 (±20度)
+const float KNEE_LIFT = 30.0;    // 足持ち上げ角度
+
+// --- スティックデッドゾーン設定 ---
+const int DEADZONE = 20;
+
+// プロトタイプ宣言
+void moveServo(int ch, float offset_deg, float base_deg);
+void setHomePosition();
+void updateGait(float current_phase, float dir_R, float dir_L);
+
+// 歩行位相管理変数
+float phase = 0.0;
+unsigned long last_time = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.println("\n--- PS4 Controlled Quadruped Robot ---");
+
+  Wire.begin(21, 22); 
+  pwm.begin();
+  pwm.setPWMFreq(50); 
+
+  // 初期位置（接地状態）で待機
+  setHomePosition();
+
+  // 💡 ESP32のBluetooth MACアドレスを指定して受信待機を開始
+  PS4.begin("30:76:f5:aa:57:5e"); 
+  Serial.println("PS4 Controller Receiver Ready.");
+  Serial.println("Press PS button on PS4 controller to connect!");
+
+  last_time = millis();
+}
+
+void loop() {
+  unsigned long current_time = millis();
+  float dt = (float)(current_time - last_time);
+  last_time = current_time;
+
+  // コントローラーが接続されているか確認
+  if (PS4.isConnected()) {
+    // 左スティックの値を取得 (-128 〜 127)
+    int lx = PS4.LStickX();
+    int ly = PS4.LStickY();
+
+    // デッドゾーン処理（不意な誤動作防止）
+    if (abs(lx) < DEADZONE) lx = 0;
+    if (abs(ly) < DEADZONE) ly = 0;
+
+    // スティック入力の判定
+    if (ly > DEADZONE) {
+      // 1. 前進 (左スティック上)
+      phase += (2.0 * PI * dt) / PERIOD;
+      if (phase >= 2.0 * PI) phase -= 2.0 * PI;
+
+      updateGait(phase, 1.0, 1.0);
+
+    } else if (ly < -DEADZONE) {
+      // 2. 後退 (左スティック下)
+      phase -= (2.0 * PI * dt) / PERIOD;
+      if (phase < 0) phase += 2.0 * PI;
+
+      updateGait(phase, 1.0, 1.0);
+
+    } else if (lx < -DEADZONE) {
+      // 3. 左旋回 (左スティック左)
+      phase += (2.0 * PI * dt) / PERIOD;
+      if (phase >= 2.0 * PI) phase -= 2.0 * PI;
+
+      updateGait(phase, 1.0, -1.0); 
+
+    } else if (lx > DEADZONE) {
+      // 4. 右旋回 (左スティック右)
+      phase += (2.0 * PI * dt) / PERIOD;
+      if (phase >= 2.0 * PI) phase -= 2.0 * PI;
+
+      updateGait(phase, -1.0, 1.0);
+
+    } else {
+      // 5. 停止 (スティックニュートラル)
+      phase = 0.0;
+      setHomePosition();
+    }
+  } else {
+    // 未接続時はニュートラル位置で待機
+    setHomePosition();
+  }
+
+  delay(10);
+}
+
+/**
+ * 歩行計算およびサーボ出力更新関数
+ */
+void updateGait(float current_phase, float dir_R, float dir_L) {
+  // ペアA（前右・後左）
+  float swing_A = SWING_AMP * cos(current_phase);
+  float lift_A_raw = -sin(current_phase);
+  float lift_A = (lift_A_raw > 0) ? (lift_A_raw * KNEE_LIFT) : 0.0;
+
+  // ペアB（前左・後右）
+  float phase_B = current_phase + PI;
+  float swing_B = SWING_AMP * cos(phase_B);
+  float lift_B_raw = -sin(phase_B);
+  float lift_B = (lift_B_raw > 0) ? (lift_B_raw * KNEE_LIFT) : 0.0;
+
+  // ■ 前右（ペアA・右側）
+  moveServo(0,  swing_A * dir_R, FR_HIP_BASE);
+  moveServo(1, -lift_A,          FR_KNEE_INIT); 
+
+  // ■ 前左（ペアB・左側）
+  moveServo(2, -swing_B * dir_L, FL_HIP_BASE);
+  moveServo(3,  lift_B,          FL_KNEE_INIT); 
+
+  // ■ 後右（ペアB・右側）
+  moveServo(4,  swing_B * dir_R, BR_HIP_BASE);
+  moveServo(5,  lift_B,          BR_KNEE_INIT); 
+
+  // ■ 後左（ペアA・左側）
+  moveServo(6, -swing_A * dir_L, BL_HIP_BASE);
+  moveServo(7, -lift_A,          BL_KNEE_INIT); 
+}
+
+/**
+ * ホームポジション（接地・待機状態）にセット
+ */
+void setHomePosition() {
+  moveServo(0, 0.0, FR_HIP_BASE);
+  moveServo(1, 0.0, FR_KNEE_INIT);
+  moveServo(2, 0.0, FL_HIP_BASE);
+  moveServo(3, 0.0, FL_KNEE_INIT);
+  moveServo(4, 0.0, BR_HIP_BASE);
+  moveServo(5, 0.0, BR_KNEE_INIT);
+  moveServo(6, 0.0, BL_HIP_BASE);
+  moveServo(7, 0.0, BL_KNEE_INIT);
+}
+
+/**
+ * サーボ駆動関数
+ */
+void moveServo(int ch, float offset_deg, float base_deg) {
+  float total_deg = base_deg + offset_deg;
+  int pca_value = PCA_CENTER + (int)((total_deg - 90.0) * DEG_TO_PCA);
+  
+  if (pca_value < 150) pca_value = 150;
+  if (pca_value > 500) pca_value = 500;
+
+  pwm.setPWM(ch, 0, pca_value);
+}
